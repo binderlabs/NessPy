@@ -46,11 +46,13 @@ cd NessPy
 pip3 install progressbar requests argparse termcolor
 ```
 
-You can symbolic link the script to /usr/bin directory:
+Symbolic link the script to `/usr/bin` directory:
 ```
 chmod +x /opt/NessPy/nesspy.py
 sudo ln -s /opt/NessPy/nesspy.py /usr/bin/nesspy
 ```
+
+Remember to change the `url`, `username`, `password` & `path` in `nesspy.py`.
 
 ## Examples
 
@@ -59,6 +61,36 @@ sudo ln -s /opt/NessPy/nesspy.py /usr/bin/nesspy
 nesspy -l
 ```
 
+### Scan a single target:
+```
+nesspy -t 127.0.0.1 -p 'my policy' -n 'My First Scan' -f 'Nessus Folder' -e 'csv,nessus,html'
+```
+(NOTE: Exported Report(s) will be stored on `output/` directory.)
+
+### Scan targets in a .txt file:
+```
+nesspy -T list.txt -p 'my policy' -n 'My First Scan' -f 'Nessus Folder' -e 'nessus' -o 'production-list'
+```
+(NOTE: No need to specify file extension in output filename.)
+
+
+### Scan a list of targets one by one in Nessus:
+```
+for i in `cat list.txt`; do nesspy -t $i -p 'compliance policy' -f 'Compliance' -e 'csv,html,nessus' -o $i;done
+```
+(NOTE: refer to `list.txt` attached in this repository for the format)
+(NOTE: if `-n` nessus scan name is not provided, target ip address will be used.)
+
+
+## Potential Future Roadmap
+
+* Allow users to export different types of reports
+* Allow users to run different types of scans instead of just policy scan.
+
+
+## Feedbacks
+
+* Email `erictee2802@gmail.com` for any recommandations, hopefully your mail is not in my junk folder. LOL.
 
 
 ## References
