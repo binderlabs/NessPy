@@ -235,7 +235,15 @@ def export_request(scan_id):
             payload =  { "format" : export_format , "password":password}
 
         elif export_format == 'pdf' or export_format =='html':
-            payload = { "format":export_format, "chapters":"vuln_hosts_summary"}
+            try:
+                if "compliance" in (args.output).lower():
+                    payload = { "format":export_format, "chapters":"compliance"}
+                
+                else:
+                    payload = { "format":export_format, "chapters":"vuln_hosts_summary"}
+                    
+            except:
+                payload = { "format":export_format, "chapters":"vuln_hosts_summary"}
 
         else:
             print("[!] Unsupported format detected!")

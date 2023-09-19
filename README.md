@@ -67,6 +67,7 @@ nesspy -t 127.0.0.1 -p 'my policy' -n 'My First Scan' -f 'Nessus Folder' -e 'csv
 ```
 (NOTE: Exported Report(s) will be stored on `output/` directory.)
 
+
 ### Scan targets in a .txt file:
 ```
 nesspy -T list.txt -p 'my policy' -n 'My First Scan' -f 'Nessus Folder' -e 'nessus' -o 'production-list'
