@@ -34,7 +34,7 @@ Feel free to customize this tool to better suit your use cases.
 
 ## Requirements
 ```
-1. Tested on Tenable Nessus Professional version 10.6.0 (#103) LINUX
+1. Tested on Tenable Nessus Professional version 10.6.0 (#103) LINUX and version 10.6.1 (#21) WINDOWS
 2. Python 3
 ```
 
@@ -43,7 +43,7 @@ Feel free to customize this tool to better suit your use cases.
 ```
 git clone https://github.com/binderlabs/NessPy.git
 cd NessPy
-pip3 install progressbar requests argparse termcolor
+pip3 install progressbar requests argparse termcolor beautifulsoup4 XlsxWriter openpyxl datetime regex
 ```
 
 Symbolic link the script to `/usr/bin` directory:
@@ -52,7 +52,7 @@ chmod +x /opt/NessPy/nesspy.py
 sudo ln -s /opt/NessPy/nesspy.py /usr/bin/nesspy
 ```
 
-Remember to change the `url`, `username`, `password` & `path` in `nesspy.py`.
+Remember to change the `url`, `username`, `password`, `path`, `compliance_path` & `previous_audit_path` in `nesspy.py`.
 
 ## Examples
 
@@ -77,11 +77,16 @@ nesspy -T list.txt -p 'my policy' -n 'My First Scan' -f 'Nessus Folder' -e 'ness
 
 ### Scan a list of targets one by one in Nessus:
 ```
-for i in `cat list.txt`; do nesspy -t $i -p 'compliance policy' -f 'Compliance' -e 'csv,html,nessus' -o $i;done
+for i in `cat list.txt`; do nesspy -t $i -p 'custom policy' -f 'Nessus Folder' -e 'csv,html,nessus' -o $i;done
 ```
 (NOTE: refer to `list.txt` attached in this repository for the format)
 (NOTE: if `-n` nessus scan name is not provided, target ip address will be used.)
 
+
+### Compliance Scan
+```
+nesspy -t 192.168.173.156 -p 'RH7_Compliance' -e 'csv,html,nessus' -o 'compliance_assessment_192.168.173.156' -f 'compliance_folder' -c 
+```
 
 ## Potential Future Roadmap
 

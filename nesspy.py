@@ -6,10 +6,13 @@ from termcolor import colored
 import json
 import sys
 import time
-import random
-import os, subprocess
+import os
 import progressbar
-
+from bs4 import BeautifulSoup
+import xlsxwriter
+import openpyxl as xl
+from datetime import date
+import re
 
 logo = """
      _   _               ____        
@@ -24,6 +27,10 @@ url = "https://localhost:8834"
 username= "admin"
 password= "password"
 path = "output"
+compliance_path = "compliance"
+previous_audit_path = "previous_audit"
+
+
 
 # Don't verify the SSL certificate
 verify = False
@@ -32,12 +39,13 @@ verify = False
 requests.packages.urllib3.disable_warnings(requests.packages.urllib3.exceptions.InsecureRequestWarning)
 
 
-usage = "\n\tnesspy [-t TARGET | -T TARGET FILE] -p [CUSTOM POLICY NAME] -f [FOLDER NAME] -e [EXPORT FORMAT] -n [SCAN NAME] -o [OUTPUT FILENAME(without extension)]\n" + logo
+usage = "nesspy [-t TARGET | -T TARGET FILE] -p [CUSTOM POLICY NAME] -f [FOLDER NAME] -e [EXPORT FORMAT] -n [SCAN NAME] -o [OUTPUT FILENAME WITHOUT EXTENSION] [ -c | --compliance] \n" + logo
 example="""Examples:
        nesspy -l
        nesspy -t 127.0.0.1 -p 'My Custom Policy' -n 'My first Nessus Scan' -e csv -o 127.0.0.1
        nesspy -t 127.0.0.1 -p 'My Custom Policy' -e csv,html,nessus -o 127.0.0.1
        nesspy -T list.txt -p 'My Custom Policy' -f 'NESSUS FOLDER' -n 'Production Machine list' -o list
+       nesspy -t 127.0.0.1 -p 'My Compliance Policy' -f 'compliance folder' -e 'csv,html,nessus' -o 'compliance_assessment_127.0.0.1' --compliance
 """
 
 parser = argparse.ArgumentParser(usage=usage,epilog=example,formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -50,6 +58,7 @@ parser.add_argument("-f",dest='folder_name',type=str,help='Folder to store nessu
 parser.add_argument("-n  ",dest='scan_name',type=str,help='Name to be used for the particular scan. If not specified, default value will be the target name.')
 parser.add_argument('-e  ',dest="export_format",help="Export the scan report in specified format.\nThe available formats are nessus,html,csv and db.")
 parser.add_argument('-o  ',dest="output",type=str,help="File to output the result.")
+parser.add_argument('-c','--compliance',action="store_true",help="Compliance scan")
 args = parser.parse_args()
 
 if not len(sys.argv)>1:
@@ -60,12 +69,12 @@ def clean():
     
 # For macOS and Linux
     if os.name == 'posix':
-        _ = subprocess.call('clear')
+        os.system('clear')
 
 
     # Windows
     elif os.name == 'nt':
-        _ = subprocess.call('cls')
+        os.system('cls')
 
 
 
@@ -84,9 +93,12 @@ def logout():
     exit()
 
 def getApiToken():
-    stream = os.popen('curl https://localhost:8834/nessus6.js -sk | grep \'key:"getApiToken",value:function(){return".\{0,36\}\' -o | cut -d \'"\' -f4')
-    api_token = stream.read().strip()
-    #print(api_token)
+    res = requests.get(url +"/nessus6.js",verify=False)
+    result = re.findall(r"key:\"getApiToken\",value:function\(\){return\".*",res.text)
+    string = result[0]
+    api_token = ""
+    for i in range(42,78):
+        api_token += string[i]
     return api_token
 
 
@@ -95,7 +107,7 @@ def list_policies():
     policies = requests.get(url + '/policies',headers=headers,verify=verify)   # Custom Policies
     templates = requests.get(url+"/editor/policy/templates",headers=headers,verify=False)       
     if policies.status_code==403 or templates.status_code==403:
-        print("[!] User don't have the permission to view the policy list")
+        print(colored("[!] User don't have the permission to view the policy list",'yellow',attrs=['bold']))
     if policies.status_code==200 and templates.status_code==200:
         return policies.json()['policies'],templates.json()['templates']        
     else:
@@ -103,22 +115,24 @@ def list_policies():
         logout()
 
 
-def get_custom_policy():
+def policy_json_from_policy_name(): 
     policies = list_policies()                                 
-    for policy in policies[0]:                   
+    for policy in policies[0]:                  
         if args.policy_name==policy['name']:
             return policy
-    for policy in policies[1]:                        
+    for policy in policies[1]:                         
         if args.policy_name==policy['title']:         
             return policy
-    print("[!] Cannot find the policy with name " + args.policy_name)
+    print(colored("[!] Cannot find the policy with name " + args.policy_name,'red',attrs=['bold']))
     logout()      
 
 def create_scan(uuid,name,targets,id):
     print("[*] Creating scan")
 
-    
+    # Check folders
     if args.folder_name:
+        # Create folder
+        
         folder = requests.post(url + "/folders",json={'name':args.folder_name},verify=verify,headers=headers)
 
         if folder.status_code == 200:
@@ -136,7 +150,6 @@ def create_scan(uuid,name,targets,id):
                 payload["settings"]["policy_id"] = id
 
         elif str(folder.json()['error']) == "A folder with the same name already exists":
-            # If folder already exists, save the scan result to that folder.
             folders = requests.get(url + "/folders",verify=verify,headers=headers).json()
 
             for folder in folders['folders']:
@@ -164,7 +177,7 @@ def create_scan(uuid,name,targets,id):
 
 
     else:
-        #Store the scan result in default My Scans folder.
+        # Store the scan result in default My Scans folder.
         payload = {"uuid" : uuid,
                 "settings" :  {
                     "name" : name,
@@ -172,7 +185,7 @@ def create_scan(uuid,name,targets,id):
                     "launch_now" : True,
                                }
                }
-        if not id=="":               
+        if not id=="":               # Used when policy id is supplied
             payload["settings"]["policy_id"] = id
 
     payload = json.dumps(payload)
@@ -235,22 +248,21 @@ def export_request(scan_id):
             payload =  { "format" : export_format , "password":password}
 
         elif export_format == 'pdf' or export_format =='html':
-            try:
-                if "compliance" in (args.output).lower():
-                    payload = { "format":export_format, "chapters":"compliance"}
+            if args.compliance:
+                res = requests.get(url + '/reports/custom/templates',headers=headers,verify=verify)
+                id = res.json()[0]['id']
+                payload = { "format":export_format, "template_id":int(id)} # Template: Detailed Vulnerabilities by Host with Compliance/Remediations
                 
-                else:
-                    payload = { "format":export_format, "chapters":"vuln_hosts_summary"}
-                    
-            except:
+            else:
                 payload = { "format":export_format, "chapters":"vuln_hosts_summary"}
 
         else:
-            print("[!] Unsupported format detected!")
+            print(colored("[!] Unsupported format detected!",'red',attrs=['bold']))
             logout()
 
         payload = json.dumps(payload)
         res = requests.post(url + '/scans/' + str(scan_id) + '/export',data=payload,verify=verify,headers=headers)
+
         if res.status_code==200:
             file_id = res.json()['file']
             print("[*] Report Generating")
@@ -258,6 +270,7 @@ def export_request(scan_id):
             while export_status(scan_id,file_id) is False:
                 time.sleep(1)
             export_download(scan_id,file_id,export_format)
+
         else:
             print("[!] " + res.json()['error'])
             print("[!] Waiting for 10 seconds before retrying...")
@@ -268,18 +281,23 @@ def export_request(scan_id):
 def export_status(scan_id,file_id):
     res = requests.get(url + '/scans/{0}/export/{1}/status'.format(scan_id,file_id),headers=headers,verify=verify)
     return res.json()['status']=='ready'
+    
 
 
 def export_download(scan_id,file_id,export_format):
-
-    print("[*] Report is ready to download!")
-    print("[*] Downloading the report")
-
+        
     res = requests.get(url + '/scans/' + str(scan_id) + '/export/' + str(file_id) +'/download',headers=headers,verify=verify)
+    
     if res.status_code != 200:
         print("[!] " + res.json()['error'])
         export_download(scan_id,file_id,export_format)
+
     else:
+        if args.compliance and export_format == 'html':       
+            write_compliance_excel(res.content)
+
+        print(colored("[*] Report is ready to download!",'green',attrs=['bold']))
+        print("[*] Downloading the report")                
         print("[*] Report downloaded")
         print("[*] Storing the report downloaded")
         if args.output:
@@ -287,19 +305,137 @@ def export_download(scan_id,file_id,export_format):
         else:
             filename = 'nessus_{0}_{1}.{2}'.format(scan_id,file_id,export_format)
 
+        
+        path = "output"
         isExist = os.path.exists(path)
         if not isExist:
             os.makedirs(path)
-
+        
         with open(path + "/" + filename,'wb') as f:
             f.write(res.content)
         print(colored("[*] Output stored to " + path + "/" + filename + "\n",'green',attrs=['bold']))
 
+def write_compliance_excel(response):
+    soup = BeautifulSoup(response,'html.parser')
+    tags = soup.find_all("ul")
+    contents = tags[2] # Failed Compliances
+    failed_compliances = contents.find_all("li")
+
+    if failed_compliances != []:
+        print("[*] Saving compliance excel files.")  
+        compliance_path = "compliance"
+        isExist = os.path.exists(compliance_path)
+        if not isExist:
+            os.makedirs(compliance_path)
+
+        today = date.today()
+        filename = compliance_path + "/" + str(args.target)+"-Compliance Assessment-"+ str(today.strftime('%Y-%b'))+ ".xlsx"
+        wb = xlsxwriter.Workbook(filename)
+        f1 = wb.add_format()
+        f1.set_bold()
+        ws = wb.add_worksheet(args.target)
+    
+        row = 1
+
+        for failed_compliance in failed_compliances:
+            ws.write(row,0,failed_compliance.text)
+            row += 1
+        table = "A1:F" + str(row)
+
+        title = "Compliance Assessment: " + args.target
+        ws.add_table(table, {'columns':[{'header':title},{'header':'Remarks'},{'header':'Justification'},{'header':'Previous Audit BDO Comments'},{'header':'BDO Comments'},{'header':'BDO Status'},],'style': None})
+        ws.set_row(0,None,f1)
+        ws.autofit()
+        wb.close()
+        print(colored("[*] Output stored to " + filename + "\n",'green',attrs=['bold']))
+        invoke_vlookup(filename)
+
+    
+    else:
+        # Need to check whether host is alive manually when this message is shown.
+        print(colored("[*] No failed compliance cases detected for "+ args.target + "\n",'green',attrs=['bold']))
+    
+
+def invoke_vlookup(filename):
+    filename = filename
+    isExist = os.path.exists(previous_audit_path)
+    if not isExist:
+        print(colored("[!] Previous compliance audit directory not found!",'yellow',attrs=['bold']))
+    
+
+
+    else:
+        files = os.listdir(previous_audit_path)
+        if files != []:
+            cwd = os.getcwd()
+            for file in files:
+                # Check IP address in filename
+                if args.target in file:
+                    # Assume only have 1 worksheet since the filename is named with IP address.
+                    wb = xl.load_workbook('./'+ filename)
+
+                    sheet = wb.active
+                    max_row = sheet.max_row
+                    
+                    for row in range(1,max_row):
+                        cell = sheet.cell(row=row+1, column=3)
+                        if os.name == 'posix':
+                            justification_vlookup = "=VLOOKUP(A"+str(row+1)+",'["+str(cwd)+"/"+previous_audit_path+"/"+file+"]"+args.target+"'!A2:F500,3,0)"
+                        elif os.name == 'nt':
+                            justification_vlookup = "=VLOOKUP(A"+str(row+1)+",'"+str(cwd)+"\\"+previous_audit_path+"\\["+file+"]"+args.target+"'!A2:F500,3,0)"
+                        cell.value = justification_vlookup
+
+                        cell = sheet.cell(row=row+1, column=4)
+                        if os.name == 'posix':
+                            previous_comment_vlookup = "=VLOOKUP(A"+str(row+1)+",'["+str(cwd)+"/"+previous_audit_path+"/"+file+"]"+args.target+"'!A2:F500,4,0)"
+                        elif os.name == 'nt':
+                            previous_comment_vlookup = "=VLOOKUP(A"+str(row+1)+",'"+str(cwd)+"\\"+previous_audit_path+"\\["+file+"]"+args.target+"'!A2:F500,4,0)"
+
+                        cell.value = previous_comment_vlookup
+
+
+                    wb.save('./'+filename)
+                    break
+                
+                elif '.xlsx' in file:
+                    wb = xl.load_workbook('./'+ previous_audit_path + "/" + file)
+                    sheetnames = wb.sheetnames
+
+                    for sheetname in sheetnames:
+                        if args.target in sheetname:
+                            wb = xl.load_workbook('./'+ filename)
+                            sheet = wb[sheetname]
+                            max_row = sheet.max_row
+                    
+                            for row in range(1,max_row):
+
+                                cell = sheet.cell(row=row+1, column=3)
+                                if os.name == 'posix':
+                                    justification_vlookup = "=VLOOKUP(A"+str(row+1)+",'["+str(cwd)+"/"+previous_audit_path+"/"+file+"]"+args.target+"'!A2:F500,3,0)"
+                                elif os.name == 'nt':
+                                    justification_vlookup = "=VLOOKUP(A"+str(row+1)+",'"+str(cwd)+"\\"+previous_audit_path+"\\["+file+"]"+args.target+"'!A2:F500,3,0)"
+                                cell.value = justification_vlookup
+
+                                cell = sheet.cell(row=row+1, column=4)
+                                if os.name == 'posix':    
+                                    previous_comment_vlookup = "=VLOOKUP(A"+str(row+1)+",'["+str(cwd)+"/"+previous_audit_path+"/"+file+"]"+args.target+"'!A2:F500,4,0)"
+                                elif os.name == 'nt':
+                                    previous_comment_vlookup = "=VLOOKUP(A"+str(row+1)+",'"+str(cwd)+"\\"+previous_audit_path+"\\["+file+"]"+args.target+"'!A2:F500,4,0)"
+                                cell.value = previous_comment_vlookup
+                            wb.save('./'+filename)
+                            break
+                       
+        
+        else:
+            print(colored("[!] Previous compliance audit directory not found!",'yellow',attrs=['bold']))
+
+
 if __name__=='__main__':
     print(logo)
+    
     token= ""
     api_token = getApiToken()
-
+    
     login()
     
     headers = {'X-Cookie': 'token=' + token,'X-Api-Token': api_token , 'content-type': 'application/json'}  
@@ -327,7 +463,11 @@ if __name__=='__main__':
         print("--------------------------\n")
         for policy in policies[1]:
             print(policy['title'])
-
+    
+   
+    if args.compliance and args.target == None:
+        print(colored("\n"+ "[!] Please specify a single target with -t for compliance scan.",'red',attrs=['bold']))
+        exit(-1)
 
     if args.target:
         target=args.target
@@ -337,10 +477,11 @@ if __name__=='__main__':
             with open(args.target_file) as t:
                 target=t.read()
         except IOError:
-            print("[!] Error opening the file: " + args.target_file)
+            print(colored("[!] Error opening the file: " + args.target_file,'red',attrs=['bold']))
             exit()
 
-    # If target and policy name both are specified,launch the scan
+
+    # If target and policy name both are specified, launch the scan.
     if args.policy_name and (args.target or args.target_file):
 
         if args.target:
@@ -351,16 +492,18 @@ if __name__=='__main__':
 
         if args.scan_name:
             name = args.scan_name
-        policy = get_custom_policy()
+        policy = policy_json_from_policy_name()
+
+    
         try:
             scan_id = create_scan(policy['template_uuid'],name,target,policy['id'])
         except KeyError:
             scan_id = create_scan(policy['uuid'],name,target,"")
         show_status(scan_id)
 
-    # Export report when -e flag is set
-    if args.export_format:
-        export_request(scan_id)
+        # Try to export the scan report in specified format, when -e flag is set
+        if args.export_format:
+            export_request(scan_id)
 
     logout()
 
